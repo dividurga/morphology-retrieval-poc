@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+results/
+HANDOFF_*.md
+.DS_Store

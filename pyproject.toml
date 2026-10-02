@@ -1,0 +1,17 @@
+[project]
+name = "morphology-retrieval-poc"
+version = "0.1.0"
+description = "Target-conditioned morphology retrieval PoC: two-sim, two-tier disparity calibration"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "cma>=4.4.4",
+    "matplotlib>=3.9.4",
+    "mujoco>=3.5.0",
+    "numpy>=2.0.2",
+    "pandas>=2.3.3",
+    "pillow>=11.3.0",
+    "pybullet>=3.2.6",
+    "scikit-learn>=1.5.0",
+    "scipy>=1.13.1",
+]
