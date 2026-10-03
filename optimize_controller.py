@@ -1,15 +1,16 @@
 """CMA-ES gait optimization: find theta maximizing forward displacement for one morphology."""
 
 import argparse
+import importlib
 import json
+from concurrent.futures import ProcessPoolExecutor
 
 import cma
 import numpy as np
 
+import backend_pybullet
 import controller
-import environment
 import morphology
-import perturbations
 
 FALL_PENALTY = 6.0
 BACKWARD_PENALTY = 10.0  # -abs(d-target) alone doesn't single out "walked backward" as
@@ -35,11 +36,11 @@ TRAIN_PERTURBATION_SEED_OFFSET = 100_000  # derives train_perturbation_seed from
 
 def fitness(model, theta: np.ndarray, duration: float = EPISODE_DURATION,
             fall_penalty: float = FALL_PENALTY, target_distance: float | None = None,
-            backend=environment) -> float:
+            backend=backend_pybullet) -> float:
     """Scalar score CMA-ES maximizes. NOT the headline metric reported later —
     just used to steer the search away from pathological "lunge and faceplant" gaits.
 
-    result = environment.simulate(model, theta, duration)
+    result = backend.simulate(model, theta, duration)
     target_distance=None: maximize displacement (unchanged default behavior).
     target_distance set: match it instead, score = -abs(displacement - target_distance),
     with an extra BACKWARD_PENALTY if displacement < 0 (see constant's comment).
@@ -59,7 +60,7 @@ def fitness(model, theta: np.ndarray, duration: float = EPISODE_DURATION,
 
 def fitness_dr(models: list, theta: np.ndarray, duration: float = EPISODE_DURATION,
                fall_penalty: float = FALL_PENALTY, target_distance: float | None = None,
-               backend=environment) -> float:
+               backend=backend_pybullet) -> float:
 
     """We bring perturbed models into the training loop"""
 
@@ -90,7 +91,7 @@ PROBE_SEED_OFFSET = 50_000  # distinct from TRAIN_PERTURBATION_SEED_OFFSET (100_
 
 
 def _target_aware_x0(params: dict, seed: int, target_distance: float, duration: float,
-                     backend=environment) -> np.ndarray:
+                     backend=backend_pybullet, workers: int = 1) -> np.ndarray:
     """x0 used to always be DEFAULT_THETA regardless of target_distance, so every
     low-target search had to discover "walk slower" from scratch -- which is why
     target=6.0 (close to a natural cruising pace) converged easily across seeds and
@@ -112,53 +113,67 @@ def _target_aware_x0(params: dict, seed: int, target_distance: float, duration: 
     unreliable (see above) to trust as the sole anchor for the whole search.
     """
     probe_seeds = [seed + i * PROBE_SEED_OFFSET for i in range(PROBE_N_SEEDS)]
-    baselines = [optimize(params, seed=s, duration=duration, target_distance=None, backend=backend)
+    baselines = [optimize(params, seed=s, duration=duration, target_distance=None, backend=backend,
+                          workers=workers)
                  for s in probe_seeds]
     baseline = max(baselines, key=lambda b: b["fitness"])
     baseline_theta = np.array(baseline["theta"])
     baseline_distance = baseline["fitness"]  # = displacement when target_distance=None
+    bounds = controller.THETA_BOUNDS
     if baseline_distance <= PROBE_MIN_DISPLACEMENT:
         return controller.DEFAULT_THETA.copy()
     scale = np.clip(target_distance / baseline_distance, *SCALE_CLIP)
     x0 = baseline_theta.copy()
     for idx in AMPLITUDE_INDICES:
-        lo, hi = controller.THETA_BOUNDS[idx]
+        lo, hi = bounds[idx]
         x0[idx] = np.clip(x0[idx] * scale, lo, hi)
     return x0
+
+
+_W = {}  # per-process state for the worker pool
+
+
+def _init_worker(backend_name, params, dr_params, duration, fall_penalty, target_distance):
+    """Models hold a pybullet/mujoco handle and cannot be pickled, so each worker builds its own."""
+    backend = importlib.import_module(backend_name)
+    models = [backend.make_model(params)] + [backend.make_model(pp) for pp in dr_params]
+    _W.update(backend=backend, models=models, duration=duration, fall_penalty=fall_penalty,
+              target_distance=target_distance)
+
+
+def _eval_worker(x):
+    w = _W
+    if len(w["models"]) > 1:
+        return -fitness_dr(w["models"], x, w["duration"], w["fall_penalty"], w["target_distance"],
+                           w["backend"])
+    return -fitness(w["models"][0], x, w["duration"], w["fall_penalty"], w["target_distance"],
+                    w["backend"])
 
 
 def optimize(params: dict, seed: int = DEFAULT_SEED, popsize: int = CMA_POPSIZE,
              maxiter: int = CMA_MAXITER, duration: float = EPISODE_DURATION,
              fall_penalty: float = FALL_PENALTY, m_perturbations: int = 0,
              train_perturbation_seed: int | None = None,
-             target_distance: float | None = None, backend=environment) -> dict:
+             target_distance: float | None = None, backend=backend_pybullet,
+             workers: int = 1) -> dict:
     """backend: any module exposing make_model(params) / simulate(model, theta, duration),
-    i.e. `environment` (MuJoCo) or `pybullet_env`. DR perturbations are MuJoCo-only."""
-    if m_perturbations > 0 and backend is not environment:
-        raise NotImplementedError("perturbations.apply_perturbation only supports MuJoCo models")
-    model = backend.make_model(params)
+    i.e. `backend_pybullet` (the training sim) or `backend_mujoco` (the real one).
 
-    # DR training: when m_perturbations > 0, build M extra perturbed models once up
-    # front (same physical perturbation family used for testing elsewhere), and score
-    # every candidate on the mean fitness across nominal + all M of them instead of
-    # nominal alone. m_perturbations=0 (default) leaves this exactly as it was before.
-    perturbed_models = []
+    workers > 1 evaluates each CMA-ES generation in a process pool. same result, less wall time."""
+    # DR training is not ported to the two-engine pipeline yet. perturbations.py only knows
+    # how to perturb a mujoco MjModel, and the DR arm has to perturb the TRAINING sim (pybullet).
     if m_perturbations > 0:
-        resolved_seed = (train_perturbation_seed if train_perturbation_seed is not None
-                          else seed + TRAIN_PERTURBATION_SEED_OFFSET)
-        rng = np.random.default_rng(resolved_seed)
-        for sample in perturbations.sample_combined(rng, n=m_perturbations):
-            perturbed_model = environment.make_model(params)
-            perturbations.apply_perturbation(perturbed_model, **sample)
-            perturbed_models.append(perturbed_model)
+        raise NotImplementedError("DR arm: port perturbations.py to the pybullet engine first")
+    dr_params = []
 
+    bounds = controller.THETA_BOUNDS
     if target_distance is not None:
-        x0 = _target_aware_x0(params, seed, target_distance, duration, backend)
+        x0 = _target_aware_x0(params, seed, target_distance, duration, backend, workers)
     else:
         x0 = controller.DEFAULT_THETA.copy()
-    lowers = [b[0] for b in controller.THETA_BOUNDS]
-    uppers = [b[1] for b in controller.THETA_BOUNDS]
-    stds0 = [(hi - lo) / 4.0 for lo, hi in controller.THETA_BOUNDS]
+    lowers = [b[0] for b in bounds]
+    uppers = [b[1] for b in bounds]
+    stds0 = [(hi - lo) / 4.0 for lo, hi in bounds]
 
     es = cma.CMAEvolutionStrategy(
         x0, 1.0,
@@ -172,15 +187,21 @@ def optimize(params: dict, seed: int = DEFAULT_SEED, popsize: int = CMA_POPSIZE,
         },
     )
 
-    all_models = [model] + perturbed_models
-
-    while not es.stop():
-        solutions = es.ask()
-        if perturbed_models:
-            losses = [-fitness_dr(all_models, np.array(x), duration, fall_penalty, target_distance, backend) for x in solutions]
-        else:
-            losses = [-fitness(model, np.array(x), duration, fall_penalty, target_distance, backend) for x in solutions]
-        es.tell(solutions, losses)
+    pool = None
+    if workers > 1:
+        pool = ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(
+            backend.__name__, params, dr_params, duration, fall_penalty, target_distance))
+    else:
+        _init_worker(backend.__name__, params, dr_params, duration, fall_penalty, target_distance)
+    try:
+        while not es.stop():
+            solutions = es.ask()
+            xs = [np.array(x) for x in solutions]
+            losses = list(pool.map(_eval_worker, xs)) if pool else [_eval_worker(x) for x in xs]
+            es.tell(solutions, losses)
+    finally:
+        if pool:
+            pool.shutdown()
 
     best_theta = np.array(es.result.xbest)
     best_fitness = -es.result.fbest
@@ -215,8 +236,9 @@ def optimize_medoid_of_n(params: dict, seeds: list, **optimize_kwargs) -> dict:
     attempts = [optimize(params, seed=s, **optimize_kwargs) for s in seeds]
     thetas = np.array([a["theta"] for a in attempts])
 
-    lo = np.array([b[0] for b in controller.THETA_BOUNDS])
-    hi = np.array([b[1] for b in controller.THETA_BOUNDS])
+    bounds = controller.THETA_BOUNDS
+    lo = np.array([b[0] for b in bounds])
+    hi = np.array([b[1] for b in bounds])
     normed = (thetas - lo) / (hi - lo)
 
     diffs = normed[:, None, :] - normed[None, :, :]

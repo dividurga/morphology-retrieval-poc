@@ -39,6 +39,19 @@ DEFAULT_THETA = np.array([
 ])
 
 
+def theta_bounds(omega_scale: float = 1.0) -> list:
+    """THETA_BOUNDS with omega scaled to the robot's time scale (spec.omega_scale)."""
+    b = list(THETA_BOUNDS)
+    b[0] = (b[0][0] * omega_scale, b[0][1] * omega_scale)
+    return b
+
+
+def default_theta(omega_scale: float = 1.0) -> np.ndarray:
+    theta = DEFAULT_THETA.copy()
+    theta[0] *= omega_scale
+    return theta
+
+
 def joint_targets(theta: np.ndarray, t: float) -> np.ndarray:
     """Return target angles [hip_left, knee_left, hip_right, knee_right] at time t.
 

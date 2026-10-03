@@ -76,13 +76,13 @@ def _leg_xml(params: dict, prefix: str, y: float, h: float) -> str:
     foot_length = params[f"foot_length_{prefix}"]
     xml = f"""
     <body name="thigh_{prefix}" pos="0 {y} {-h}">
-      <joint name="hip_{prefix}" type="hinge" axis="0 1 0" range="{HIP_RANGE[0]} {HIP_RANGE[1]}"/>
+      <joint name="hip_{prefix}" type="hinge" axis="0 1 0" range="{HIP_RANGE[0]} {HIP_RANGE[1]}" limited="true"/>
       <geom name="thigh_{prefix}" type="capsule" fromto="0 0 0 0 0 {-thigh_length}" size="{THIGH_RADIUS}"/>
       <body name="shank_{prefix}" pos="0 0 {-thigh_length}">
-        <joint name="knee_{prefix}" type="hinge" axis="0 1 0" range="{KNEE_RANGE[0]} {KNEE_RANGE[1]}"/>
+        <joint name="knee_{prefix}" type="hinge" axis="0 1 0" range="{KNEE_RANGE[0]} {KNEE_RANGE[1]}" limited="true"/>
         <geom name="shank_{prefix}" type="capsule" fromto="0 0 0 0 0 {-shank_length}" size="{SHANK_RADIUS}"/>
         <body name="foot_{prefix}" pos="0 0 {-shank_length}">
-          <joint name="ankle_{prefix}" type="hinge" axis="0 1 0" range="{ANKLE_RANGE[0]} {ANKLE_RANGE[1]}" stiffness="{params['ankle_stiffness']}" damping="{params['ankle_damping']}"/>
+          <joint name="ankle_{prefix}" type="hinge" axis="0 1 0" range="{ANKLE_RANGE[0]} {ANKLE_RANGE[1]}" limited="true" stiffness="{params['ankle_stiffness']}" damping="{params['ankle_damping']}"/>
           <geom name="foot_{prefix}" type="box" pos="{foot_length/2 - FOOT_HEEL} 0 {-FOOT_HALF_THICK}" size="{foot_length/2} {FOOT_HALF_WIDTH} {FOOT_HALF_THICK}"/>
         </body>
       </body>
@@ -91,7 +91,14 @@ def _leg_xml(params: dict, prefix: str, y: float, h: float) -> str:
 """
     return xml
 
-def build_biped_xml(params: dict) -> str:
+def root_height(params: dict) -> float:
+    h = params["torso_size"] / 2.0
+    return (h + max(params["thigh_length_left"], params["thigh_length_right"])
+            + max(params["shank_length_left"], params["shank_length_right"])
+            + 2 * FOOT_HALF_THICK + GROUND_CLEARANCE)
+
+
+def build_biped_xml(params: dict, torque_actuators: bool = False) -> str:
     h = params["torso_size"] / 2.0
     torso_radius = TORSO_RADIUS_RATIO * params["torso_size"]
     # legs may differ in length now -- spawn at a height that clears the LONGER of each
@@ -106,6 +113,17 @@ def build_biped_xml(params: dict) -> str:
         + GROUND_CLEARANCE
     )
 
+    kp_hip, kp_knee = params["actuator_kp_hip"], params["actuator_kp_knee"]
+    if torque_actuators:
+        # plain torque motors: the shared loop computes kp*(target - q) itself, so both engines get
+        # the same torque. identical law to the position actuator below, which is the original.
+        actuators = "\n".join(f'    <motor name="{n}" joint="{n}" gear="1"/>'
+                              for n in ("hip_left", "knee_left", "hip_right", "knee_right"))
+    else:
+        actuators = f"""    <position name="hip_left" joint="hip_left" kp="{kp_hip}" ctrlrange="{HIP_RANGE[0]} {HIP_RANGE[1]}"/>
+    <position name="knee_left" joint="knee_left" kp="{kp_knee}" ctrlrange="{KNEE_RANGE[0]} {KNEE_RANGE[1]}"/>
+    <position name="hip_right" joint="hip_right" kp="{kp_hip}" ctrlrange="{HIP_RANGE[0]} {HIP_RANGE[1]}"/>
+    <position name="knee_right" joint="knee_right" kp="{kp_knee}" ctrlrange="{KNEE_RANGE[0]} {KNEE_RANGE[1]}"/>"""
     left_leg = _leg_xml(params, "left", params["hip_y_offset"], h)
     right_leg = _leg_xml(params, "right", -params["hip_y_offset"], h)
 
@@ -138,10 +156,7 @@ def build_biped_xml(params: dict) -> str:
   </worldbody>
 
   <actuator>
-    <position name="hip_left" joint="hip_left" kp="{params['actuator_kp_hip']}" ctrlrange="{HIP_RANGE[0]} {HIP_RANGE[1]}"/>
-    <position name="knee_left" joint="knee_left" kp="{params['actuator_kp_knee']}" ctrlrange="{KNEE_RANGE[0]} {KNEE_RANGE[1]}"/>
-    <position name="hip_right" joint="hip_right" kp="{params['actuator_kp_hip']}" ctrlrange="{HIP_RANGE[0]} {HIP_RANGE[1]}"/>
-    <position name="knee_right" joint="knee_right" kp="{params['actuator_kp_knee']}" ctrlrange="{KNEE_RANGE[0]} {KNEE_RANGE[1]}"/>
+{actuators}
   </actuator>
 </mujoco>
 """

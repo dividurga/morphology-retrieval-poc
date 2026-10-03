@@ -24,6 +24,28 @@ made goal-aware. Rationale: the controller has no way to sense arrival at a
 point, so "reach point X" can only mean "cruise at the speed that lands
 near X in a fixed episode," not literal navigation.
 
+**Dataset by post-hoc relabeling, not a search per target.** The fitness
+`-|achieved_distance - target|` has a known maximum of 0, reached when a
+controller lands on the target without falling. So a controller that achieved
+distance `d` in the twin, deterministically and without falling, is a global
+optimum for target `d`, and the row is certified by computing its fitness. No
+per-target search is needed. Rules:
+- The relabeling evaluation MUST be the objective's evaluation: same episode
+  length, same fall rule, same twin settings.
+- A row MUST NOT have fallen. It MUST re-evaluate to the same distance
+  (determinism check).
+- Coverage is not guaranteed. Dense near short distances, thin near a
+  morphology's maximum. Empty bins MUST be recorded as "not reached by this
+  morphology", not dropped. Gaps MAY be filled by a short directed search.
+- Many controllers share a label and differ in fragility. Keep every
+  non-falling evaluation in an archive. Pick the per-bin representative by an
+  explicit rule, not implicitly. Any rule beyond distance (robustness,
+  energy) changes the objective and MUST be stated.
+- Exactly optimal only at its own label. A query between labels has error up
+  to half the bin width, so bins MUST be dense.
+- This is the twin side only. In the real sim the same controller achieves a
+  different distance. That is the disparity the surrogate predicts.
+
 **DR training, as an empirical comparison, not an assumption.** Every
 `(morphology, target)` pair trains two arms: nominal-only and DR-randomized
 (`optimize_controller.py`'s existing `m_perturbations`/`fitness_dr` path,
