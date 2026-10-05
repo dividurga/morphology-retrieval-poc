@@ -10,12 +10,15 @@ tuned to make the engines agree.
 import os
 import tempfile
 
+from collections import deque
+
 import mujoco
 import numpy as np
 import pybullet as p
 
 import controller
 import morphology
+import perturbations
 from environment import ResultOfARollout
 
 DT = 0.005  # the mjcf's timestep. both engines step at this.
@@ -24,12 +27,16 @@ RANGES = {"hip": morphology.HIP_RANGE, "knee": morphology.KNEE_RANGE}
 NAMES = controller.ACTUATOR_ORDER  # hip_left, knee_left, hip_right, knee_right
 
 
-def command_to_torque(params: dict, q: np.ndarray, targets: np.ndarray) -> np.ndarray:
-    """shared by both engines: tau = kp * (clipped target - q), the original position actuator."""
+def command_to_torque(params: dict, q: np.ndarray, targets: np.ndarray, deadband: float = 0.0) -> np.ndarray:
+    """shared by both engines: tau = kp * (clipped target - q), the original position actuator.
+    deadband (rad) shrinks the error toward zero, the gearbox backlash of ModelForm. 0 = the original law."""
     kp = np.array([params["actuator_kp_hip"], params["actuator_kp_knee"]] * 2)
     lo = np.array([RANGES[n.split("_")[0]][0] for n in NAMES])
     hi = np.array([RANGES[n.split("_")[0]][1] for n in NAMES])
-    return kp * (np.clip(targets, lo, hi) - q)
+    e = np.clip(targets, lo, hi) - q
+    if deadband:
+        e = np.sign(e) * np.maximum(np.abs(e) - deadband, 0.0)
+    return kp * e
 
 
 class MuJoCoEngine:
@@ -47,6 +54,9 @@ class MuJoCoEngine:
 
     def joints(self):
         return self.d.qpos[self.qa].copy()
+
+    def velocities(self):
+        return self.d.qvel[[int(self.m.joint(n).dofadr[0]) for n in NAMES]].copy()
 
     def apply(self, tau):
         self.d.ctrl[:] = tau
@@ -157,6 +167,9 @@ class PyBulletEngine:
     def joints(self):
         return np.array([x[0] for x in p.getJointStates(self.body, self.ji, physicsClientId=self.c)])
 
+    def velocities(self):
+        return np.array([x[1] for x in p.getJointStates(self.body, self.ji, physicsClientId=self.c)])
+
     def apply(self, tau):
         p.setJointMotorControlArray(self.body, self.ji, p.TORQUE_CONTROL, forces=list(tau),
                                     physicsClientId=self.c)
@@ -175,22 +188,111 @@ class PyBulletEngine:
                 p.getJointState(self.body, self.idx["root_pitch"], physicsClientId=self.c)[0])
 
 
-def rollout(eng, theta: np.ndarray, duration: float = 8.0, trace: float = 0.0):
+SETTLE = 0.5  # s. hold the spawn pose (all joint targets 0) first, so contacts relax before the gait starts
+
+
+class ModelForm:
+    """model-form error between a controller and the actuators it was designed for. engine-agnostic: applied in rollout,
+    so pybullet and mujoco get exactly the same error. an Unitree A1/Go1-class QDD joint (33.5 Nm peak, 21 rad/s no-load,
+    6.33:1 planetary gearbox) fits this biped's size (about 17 kg, 0.22 m links). values from the public spec sheets, from
+    memory: check the datasheet before citing. fixed in advance, never tuned against any engine's output.
+    chain per control substep: sensed q (quantised, noisy) -> PD with backlash deadband -> speed-torque limit
+    -> Coulomb gear friction -> first-order lag."""
+
+    def __init__(self, tau_max=33.5, omega_free=21.0, coulomb=0.2, backlash_deg=0.5, lag_tau=0.005,
+                 enc_bits=14, enc_noise=1e-3, seed=0):
+        self.tau_max, self.omega_free, self.coulomb = tau_max, omega_free, coulomb
+        self.deadband = np.deg2rad(backlash_deg) / 2.0  # half the gap each side of the target
+        self.lag_tau, self.enc_step, self.enc_noise, self.seed = lag_tau, 2 * np.pi / 2 ** enc_bits, enc_noise, seed
+
+    def start(self):
+        """fresh per-rollout state, so a rollout is deterministic."""
+        self.rng, self.tau_state = np.random.default_rng(self.seed), np.zeros(4)
+
+    def sense(self, q):
+        return np.round((q + self.rng.normal(0.0, self.enc_noise, q.shape)) / self.enc_step) * self.enc_step
+
+    def torque(self, tau, w, dt):
+        lim = self.tau_max * np.clip(1.0 - np.abs(w) / self.omega_free, 0.0, 1.0)
+        tau = np.clip(tau, -lim, lim) - self.coulomb * np.tanh(w / 0.1)
+        self.tau_state = self.tau_state + (dt / (self.lag_tau + dt)) * (tau - self.tau_state)
+        return self.tau_state
+
+
+def rollout(eng, theta: np.ndarray, duration: float = 8.0, trace: float = 0.0, settle: float = SETTLE, mf=None):
     """open-loop rollout, same loop for both engines. fell = pitch > 1 rad or torso below half height.
-    trace > 0 also returns (x, z, pitch) per control step for the first `trace` seconds."""
+    settle seconds first hold the spawn pose (all targets 0). distance, fall time and trace are all measured from the
+    end of settling. a fall during settling counts as fell. trace > 0 also returns (x, z, pitch) per control step for the
+    first `trace` seconds of the gait. mf = a ModelForm, or None for the plain engine. settle=0, mf=None is the old loop."""
     eng.reset()
     tr = []
-    for step in range(int(round(duration / DT))):
-        tg = controller.joint_targets(theta, step * DT)
-        sub = getattr(eng, "sub", 1)
+    sub = getattr(eng, "sub", 1)
+    motor, delay = getattr(eng, "motor", 1.0), getattr(eng, "delay", 0)
+    lag = deque([np.zeros(4)] * (delay * sub))  # actuator lag: torque computed `delay` control steps ago
+    if mf:
+        mf.start()
+    n_settle = int(round(settle / DT))
+    x0 = 0.0  # the torso starts at x = 0 in both engines. after settling, x0 is where the gait starts from
+    for step in range(n_settle + int(round(duration / DT))):
+        t = max(0, step - n_settle) * DT
+        tg = np.zeros(4) if step < n_settle else controller.joint_targets(theta, t)  # settling holds the spawn pose
         for _ in range(sub):
-            eng.apply(command_to_torque(eng.params, eng.joints(), tg))
+            q = eng.joints()
+            if mf:
+                tau = motor * command_to_torque(eng.params, mf.sense(q), tg, mf.deadband)
+                tau = mf.torque(tau, eng.velocities(), DT / sub)
+            else:
+                tau = motor * command_to_torque(eng.params, q, tg)
+            if lag:
+                lag.append(tau)
+                tau = lag.popleft()
+            eng.apply(tau)
             eng.step()
         x, z, pitch = eng.state()
-        if step * DT < trace:
-            tr.append((x, z, pitch))
+        if step == n_settle - 1:
+            x0 = x
+        t_gait = (step + 1 - n_settle) * DT
+        if step >= n_settle and t_gait - DT < trace:
+            tr.append((x - x0, z, pitch))
         if abs(pitch) > FALL_PITCH or z < FALL_HEIGHT_FRAC * eng.standing:
-            res = ResultOfARollout(displacement=x, fell=True, fell_time=(step + 1) * DT)
+            res = ResultOfARollout(displacement=x - x0, fell=True, fell_time=max(t_gait, 0.0))
             return (res, tr) if trace else res
-    res = ResultOfARollout(displacement=eng.state()[0], fell=False, fell_time=None)
+    res = ResultOfARollout(displacement=eng.state()[0] - x0, fell=False, fell_time=None)
     return (res, tr) if trace else res
+
+
+# a "reality" is the same engine with a lag and a set of multipliers (perturbations.py), applied once after the
+# engine is built. same spec for both engines, so a gap here is structured and the engine is not the variable.
+
+def _pybullet_perturb(eng, friction, mass, damping):
+    """absolute, not cumulative: nominal values are cached on first use, so one engine can be re-perturbed."""
+    c = eng.c
+    if not hasattr(eng, "_nominal"):
+        eng._nominal = {}
+        for i in range(-1, p.getNumJoints(eng.body, physicsClientId=c)):
+            m, _, inertia = p.getDynamicsInfo(eng.body, i, physicsClientId=c)[:3]
+            eng._nominal[i] = (m, list(inertia))
+    p.changeDynamics(0, -1, lateralFriction=morphology.GROUND_FRICTION_NOMINAL * friction, physicsClientId=c)
+    for i, (m, inertia) in eng._nominal.items():
+        if m > 0:
+            p.changeDynamics(eng.body, i, mass=m * mass, localInertiaDiagonal=[x * mass for x in inertia], physicsClientId=c)
+    for n in perturbations.ACTUATED_JOINTS:
+        p.changeDynamics(eng.body, eng.idx[n], jointDamping=morphology.JOINT_DAMPING * damping, physicsClientId=c)
+
+
+def apply_reality(eng, spec: dict):
+    """spec: delay (control steps), friction, mass, motor, damping."""
+    eng.motor, eng.delay = spec["motor"], spec["delay"]
+    if eng.name == "mujoco":
+        perturbations.apply_perturbation(eng.m, friction=spec["friction"], mass=spec["mass"], motor=1.0,
+                                         damping=spec["damping"])
+    else:
+        _pybullet_perturb(eng, spec["friction"], spec["mass"], spec["damping"])
+    return eng
+
+
+def make_engine(kind: str, params: dict):
+    """the twin in each engine. pybullet = the full setup ladder (what a person does). mujoco = native."""
+    if kind == "mujoco":
+        return MuJoCoEngine(params)
+    return PyBulletEngine(params, fixes=tuple(LADDER))

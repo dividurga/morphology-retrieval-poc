@@ -26,18 +26,30 @@ BIN = 0.05  # m
 MAX_DIST = 3.0  # bins cover 0 to this
 
 
+# a small body family: three free parameters, everything else at morphology.NOMINAL_PARAMS. left and right legs are tied
+# (asymmetric legs tilt the torso before the gait starts, and make standing very hard). +-30% around nominal.
+FREE = {"thigh_length": 0.3, "shank_length": 0.3, "torso_size": 0.3}
+
+
 def sample_morphologies(n: int, seed: int) -> list:
-    names = list(morphology.PARAM_BOUNDS)
-    lo = np.array([morphology.PARAM_BOUNDS[k][0] for k in names])
-    hi = np.array([morphology.PARAM_BOUNDS[k][1] for k in names])
-    u = qmc.LatinHypercube(d=len(names), seed=seed).random(n)
-    return [dict(zip(names, (lo + u[i] * (hi - lo)).tolist())) for i in range(n)]
+    """n bodies, Latin hypercube over FREE. returns full params dicts (every key morphology.build_biped_xml needs)."""
+    u = qmc.LatinHypercube(d=len(FREE), seed=seed).random(n)
+    nom = morphology.NOMINAL_PARAMS
+    out = []
+    for row in u:
+        f = {k: nom[f"{k}_left" if k != "torso_size" else k] * (1 + w * (2 * v - 1)) for (k, w), v in zip(FREE.items(), row)}
+        p = dict(nom)
+        for side in ("left", "right"):
+            p[f"thigh_length_{side}"], p[f"shank_length_{side}"] = f["thigh_length"], f["shank_length"]
+        p["torso_size"] = f["torso_size"]
+        out.append(p)
+    return out
 
 
 def search_morphology(task):
     """one morphology: restarts, log every evaluation. returns arrays."""
-    mid, params, seed = task
-    eng = engines.PyBulletEngine(params, fixes=tuple(engines.LADDER))
+    mid, params, seed, kind = task
+    eng = engines.make_engine(kind, params)
     lo = [b[0] for b in controller.THETA_BOUNDS]
     hi = [b[1] for b in controller.THETA_BOUNDS]
     log_theta, log_d, log_fell, log_ft = [], [], [], []
@@ -102,10 +114,11 @@ if __name__ == "__main__":
     ap.add_argument("--out", default="data_pilot")
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--engine", default="pybullet", choices=["pybullet", "mujoco"], help="the twin the dataset is made in")
     args = ap.parse_args()
     os.makedirs(f"{args.out}/archive", exist_ok=True)
     morphs = sample_morphologies(args.morphologies, args.seed)
-    todo = [(i, m, args.seed) for i, m in enumerate(morphs) if not os.path.exists(f"{args.out}/archive/m{i:04d}.npz")]
+    todo = [(i, m, args.seed, args.engine) for i, m in enumerate(morphs) if not os.path.exists(f"{args.out}/archive/m{i:04d}.npz")]
     print(f"{len(morphs)} morphologies, {len(todo)} to do. episode {EPISODE}s, {len(TARGETS)} restarts x {POPSIZE}x{MAXITER}", flush=True)
     names = list(morphology.PARAM_BOUNDS)
     t0 = time.time()

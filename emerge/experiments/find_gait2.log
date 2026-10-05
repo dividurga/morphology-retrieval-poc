@@ -1,0 +1,16 @@
+gen 1: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 2: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 3: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 4: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 5: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 6: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 7: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 8: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 9: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 10: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 11: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+gen 12: best so far 0.199 m, phases [173.0, 124.0, 176.0]
+
+repeatability: 12 runs each, same genome and seed
+  robust best phases [173.0, 124.0, 176.0]: {'median': 0.16172416944990942, 'std': 0.055421517703814954, 'break_share': 0.6875, 'ok': False}
+  robust best phases [173.0, 124.0, 176.0]  mean 0.177 std 0.054  runs [0.2, 0.137, 0.197, 0.204, 0.196, 0.188, 0.006, 0.2, 0.192, 0.198, 0.202, 0.201]

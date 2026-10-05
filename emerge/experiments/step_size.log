@@ -1,0 +1,16 @@
+physics step 5.0 ms
+  3 act: mean 0.139 std 0.026  runs [0.132, 0.172, 0.152, 0.102]
+  4 act: mean 0.074 std 0.011  runs [0.088, 0.08, 0.068, 0.059]
+  5 act: mean 0.080 std 0.072  runs [0.134, 0.02, 0.167, 0.0]
+  4 act: mean 0.101 std 0.059  runs [0.156, 0.161, 0.033, 0.052]
+  3 act: mean 0.188 std 0.049  runs [0.153, 0.164, 0.272, 0.164]
+  3 act: mean 0.075 std 0.061  runs [0.142, 0.007, 0.131, 0.022]
+  mean within-genome std 0.046, std of genome means 0.042
+physics step 2.5 ms
+  3 act: mean 0.108 std 0.077  runs [0.026, 0.083, 0.087, 0.234]
+  4 act: mean 0.009 std 0.016  runs [0.036, 0.0, 0.0, 0.0]
+  5 act: mean 0.037 std 0.015  runs [0.014, 0.038, 0.041, 0.055]
+  4 act: mean 0.099 std 0.061  runs [0.166, 0.142, 0.007, 0.082]
+  3 act: mean 0.200 std 0.049  runs [0.23, 0.225, 0.23, 0.115]
+  3 act: mean 0.041 std 0.063  runs [0.002, 0.15, 0.006, 0.004]
+  mean within-genome std 0.047, std of genome means 0.063

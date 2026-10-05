@@ -1,0 +1,21 @@
+2 act, 0/90
+  sim (3 runs)         distance 0.135 (min 0.134, max 0.136) broken 0.0
+  A parameters only    distance 0.136 (min 0.132, max 0.140) broken 0.0
+  A + engine (ode)     distance 0.178 (min 0.161, max 0.195) broken 0.0
+  A + servo model      distance 0.137 (min 0.133, max 0.143) broken 0.0
+  A + connector rule   distance 0.131 (min 0.126, max 0.137) broken 0.0
+  A all three          distance 0.183 (min 0.171, max 0.191) broken 0.0
+2 act, 0/0
+  sim (3 runs)         distance 0.036 (min 0.033, max 0.042) broken 0.0
+  A parameters only    distance 0.027 (min 0.020, max 0.036) broken 0.0
+  A + engine (ode)     distance 0.180 (min 0.155, max 0.194) broken 0.0
+  A + servo model      distance 0.026 (min 0.017, max 0.037) broken 0.0
+  A + connector rule   distance 0.024 (min 0.015, max 0.035) broken 0.0
+  A all three          distance 0.174 (min 0.153, max 0.191) broken 0.0
+3 act, 0/90/180
+  sim (3 runs)         distance 0.014 (min 0.003, max 0.021) broken 1.0
+  A parameters only    distance 0.015 (min 0.000, max 0.032) broken 1.0
+  A + engine (ode)     distance 0.131 (min 0.105, max 0.152) broken 0.0
+  A + servo model      distance 0.015 (min 0.003, max 0.023) broken 1.0
+  A + connector rule   distance 0.021 (min 0.000, max 0.032) broken 1.0
+  A all three          distance 0.125 (min 0.103, max 0.146) broken 0.0

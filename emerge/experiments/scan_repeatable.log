@@ -1,0 +1,5 @@
+no break in any of 6 runs and std < 1 cm: 3/40 (8%)
+a break in every run: 9/40; mixed: 28/40
+distance of the repeatable gaits (median over runs): [0.136, 0.142, 0.169]
+within-gait std: repeatable 0.0029 m, others 0.037 m; spread of gait medians 0.047 m
+best repeatable: [([58.0, 359.0, 165.0], 0.169, 0.0044), ([129.0, 22.0, 313.0], 0.142, 0.0019), ([196.0, 238.0, 249.0], 0.136, 0.0023)]
