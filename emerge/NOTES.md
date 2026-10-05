@@ -11,6 +11,10 @@ sim = EMERGE's own CoppeliaSim models (edhmor). two reals: A, a slightly differe
     uv run python -m emerge.checks.check_break         # sim broken-connection counter
     uv run python -m emerge.visualize --phases 0 90 --duration 20   # gif of sim, real A, real B side by side -> emerge/viz/
 
+## dataset plan
+
+`emerge/PLAN_DATASET.md`: every row carries a task goal (target distance T, post-hoc relabeling), the admission rule, the success rule and the cpu plan. nothing of it is implemented yet.
+
 ## layout
 
 top level: `morph.py` (genome), `sim_coppelia.py`, `sim_fast.py`, `pool.py` (the sim), `real_coppelia.py` (real A), `real_mujoco.py` (real B), `run_both.py`, `visualize.py`, `module_geometry.json` (made by `probe_geom.py`), the start/stop scripts. `checks/` sanity checks of the builds. `experiments/` diagnostics, calibration and bisection scripts with their logs, each cited below. `viz/` and `vendor/` are generated, gitignored.
