@@ -4,3 +4,11 @@ __pycache__/
 results/
 HANDOFF_*.md
 .DS_Store
+emerge/vendor/
+emerge/cs*.log
+emerge/viz/
+tubey/
+check/*.gif
+archive/old_runs/data/
+archive/old_runs/results_all/
+archive/old_runs/check_old/
